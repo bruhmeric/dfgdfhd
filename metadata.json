@@ -1,0 +1,5 @@
+{
+  "name": "MagnetPak Direct",
+  "description": "A privacy-focused Magnet-to-PikPak downloader. Uses a shared account but filters views to show only user-added files. Includes Docker support for easy VPS deployment.",
+  "requestFramePermissions": []
+}
