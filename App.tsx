@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DEFAULT_USER, DEFAULT_PASS, LOCAL_STORAGE_KEYS } from './constants';
 import { PikPakService, VerificationError } from './services/pikpakService';
 import { TaskStatus, PikPakFile } from './types';
@@ -35,10 +35,6 @@ export default function App() {
   const [magnetLink, setMagnetLink] = useState('');
   const [myFiles, setMyFiles] = useState<TaskStatus[]>([]);
   
-  // Login State
-  const [email, setEmail] = useState(DEFAULT_USER);
-  const [password, setPassword] = useState(DEFAULT_PASS);
-
   // Captcha State
   const [captchaOpen, setCaptchaOpen] = useState(false);
   const [captchaImage, setCaptchaImage] = useState<string>('');
@@ -50,6 +46,12 @@ export default function App() {
       args: any[];
   } | null>(null);
 
+  // Auto-Login on Mount if no token
+  useEffect(() => {
+    if (!token) {
+        handleLogin();
+    }
+  }, []);
 
   // Load My Files from Local Storage on mount
   useEffect(() => {
@@ -77,7 +79,6 @@ export default function App() {
           try {
               setCaptchaLoading(true);
               setCaptchaOpen(true);
-              // Small delay to ensure modal renders if needed, but mainly fetch data
               const initData = await PikPakService.initCaptcha();
               setCaptchaImage(initData.url);
               setCaptchaSign(initData.captcha_token);
@@ -94,20 +95,19 @@ export default function App() {
       }
   };
 
-  const handleLogin = async (e?: React.FormEvent, captchaToken?: string) => {
-    if (e) e.preventDefault();
+  const handleLogin = async (captchaToken?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await PikPakService.login(email, password, captchaToken);
+      const data = await PikPakService.login(DEFAULT_USER, DEFAULT_PASS, captchaToken);
       setToken(data.access_token);
       localStorage.setItem(LOCAL_STORAGE_KEYS.TOKEN, data.access_token);
-      setCaptchaOpen(false); // Close modal if open
+      setCaptchaOpen(false); 
+      setPendingAction(null);
     } catch (err: any) {
       if (!captchaToken) {
-          // Only handle captcha flow if we haven't already tried WITH a token
-          // (prevents infinite loops if captcha is wrong)
-          await handleApiError(err, 'LOGIN', [email, password]);
+          // Pass default creds as args just for consistency, though we use constants
+          await handleApiError(err, 'LOGIN', [DEFAULT_USER, DEFAULT_PASS]);
       } else {
           setError(err.message || "Login failed even with captcha");
       }
@@ -139,6 +139,7 @@ export default function App() {
       setMyFiles(prev => [newTask, ...prev]);
       setMagnetLink('');
       setCaptchaOpen(false);
+      setPendingAction(null);
     } catch (err: any) {
        if (!captchaToken) {
            await handleApiError(err, 'ADD_MAGNET', [magnetLink, token]);
@@ -162,16 +163,8 @@ export default function App() {
 
           // 2. Retry pending action
           if (pendingAction.type === 'LOGIN') {
-              await handleLogin(undefined, verificationToken);
+              await handleLogin(verificationToken);
           } else if (pendingAction.type === 'ADD_MAGNET') {
-              // Usually magnet link needs re-input or state persistence? 
-              // We have 'magnetLink' state, but ensure it wasn't cleared.
-              // Actually, the args are saved in pendingAction.
-              // Note: handleAddMagnet relies on `magnetLink` state and `token` state.
-              // We should probably pass args explicitly to handleAddMagnet, but for now we rely on closure/state.
-              // To be safe, let's update handleAddMagnet signature? 
-              // Actually, simpler: just call handleAddMagnet(undefined, verificationToken)
-              // It uses current state `magnetLink`. 
               await handleAddMagnet(undefined, verificationToken);
           }
 
@@ -194,7 +187,6 @@ export default function App() {
   const updateTaskStatus = useCallback(async (task: TaskStatus) => {
       if (!token) return task;
       
-      // If complete and has fileId, we might want to refresh file details or just leave it
       if (task.status === 'complete' && task.fileId) {
           return task; 
       }
@@ -276,7 +268,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 font-sans relative">
       
-      {/* Captcha Modal */}
+      {/* Captcha Modal - Always available in DOM */}
       {captchaOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
               <div className="bg-gray-800 rounded-xl shadow-2xl border border-gray-600 max-w-sm w-full p-6 animate-fade-in">
@@ -334,7 +326,6 @@ export default function App() {
             </div>
             {token && (
                 <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-400 hidden sm:block">{email}</span>
                     <button 
                         onClick={() => {
                             setToken(null);
@@ -342,7 +333,7 @@ export default function App() {
                         }}
                         className="text-sm text-red-400 hover:text-red-300 transition-colors"
                     >
-                        Logout
+                        Re-Login
                     </button>
                 </div>
             )}
@@ -351,48 +342,25 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
         {!token ? (
-            <div className="flex items-center justify-center py-10">
-                <div className="max-w-md w-full bg-gray-800 rounded-lg shadow-xl p-8 border border-gray-700">
-                  <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-primary-500 mb-2">Welcome Back</h1>
-                    <p className="text-gray-400">Login to access your node.</p>
-                  </div>
-                  
-                  <form onSubmit={(e) => handleLogin(e)} className="space-y-6">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Email</label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-700 rounded px-4 py-2 text-white focus:outline-none focus:border-primary-500 transition-colors"
-                      />
+            <div className="min-h-[50vh] flex items-center justify-center">
+                {error && !captchaOpen ? (
+                     <div className="max-w-md w-full p-6 bg-gray-800 rounded border border-red-900/50 text-center">
+                        <h3 className="text-red-500 font-bold mb-2">Connection Failed</h3>
+                        <p className="text-gray-400 mb-6">{error}</p>
+                        <button 
+                            onClick={() => handleLogin()} 
+                            className="bg-primary-600 hover:bg-primary-500 text-white font-bold py-2 px-6 rounded transition-colors"
+                        >
+                            Retry Connection
+                        </button>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Password</label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-700 rounded px-4 py-2 text-white focus:outline-none focus:border-primary-500 transition-colors"
-                      />
+                ) : (
+                    <div className="flex flex-col items-center">
+                        <RefreshIcon spinning={true} />
+                        <p className="mt-4 text-gray-400 text-lg">Connecting to Node...</p>
+                        {loading && captchaOpen && <p className="text-sm text-gray-500 mt-2">Waiting for captcha...</p>}
                     </div>
-                    
-                    {error && (
-                      <div className="bg-red-500/10 border border-red-500/50 text-red-500 p-3 rounded text-sm">
-                        {error}
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full bg-primary-600 hover:bg-primary-500 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {loading ? 'Authenticating...' : 'Initialize Session'}
-                    </button>
-                  </form>
-                </div>
+                )}
             </div>
         ) : (
             <>
