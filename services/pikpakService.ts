@@ -1,4 +1,4 @@
-import { PikPakLoginResponse, PikPakFile, PikPakTask } from '../types';
+import { PikPakLoginResponse, PikPakFile, PikPakTask, CaptchaInitResponse, CaptchaVerifyResponse } from '../types';
 
 // NOTE: When running locally without the Nginx proxy, you might hit CORS errors.
 // The Docker setup provided in the solution includes an Nginx reverse proxy to handle this.
@@ -7,38 +7,65 @@ import { PikPakLoginResponse, PikPakFile, PikPakTask } from '../types';
 
 const AUTH_API_BASE = '/api/auth/v1';
 const DRIVE_API_BASE = '/api/drive/v1';
+const CLIENT_ID = "YNxT9w7GMvwDryEF"; // Common Web Client ID
+
+export class VerificationError extends Error {
+  public data: any;
+  constructor(data: any) {
+    super(data.error_description || 'Verification required');
+    this.name = 'VerificationError';
+    this.data = data;
+  }
+}
 
 export const PikPakService = {
   
-  async login(username: string, password: string): Promise<PikPakLoginResponse> {
+  async login(username: string, password: string, captchaToken?: string): Promise<PikPakLoginResponse> {
+    const body: any = {
+      username,
+      password,
+      client_id: CLIENT_ID,
+    };
+
+    if (captchaToken) {
+      body.captcha_token = captchaToken;
+    }
+
     const response = await fetch(`${AUTH_API_BASE}/auth/signin`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        username,
-        password,
-        client_id: "YNxT9w7GMvwDryEF", // Common Web Client ID
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
       const err = await response.json();
+      // Check for captcha/verification error codes
+      // 16: Verification code required (generic)
+      // 400 with verification_required
+      if (err.error_code === 16 || err.error === 'verification_required') {
+         throw new VerificationError(err);
+      }
       throw new Error(err.error_description || 'Login failed');
     }
 
     return response.json();
   },
 
-  async addMagnet(magnetUrl: string, accessToken: string): Promise<PikPakTask> {
-    // 1. We initiate a file upload of type 'url'
+  async addMagnet(magnetUrl: string, accessToken: string, captchaToken?: string): Promise<PikPakTask> {
+    const headers: any = {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    };
+
+    if (captchaToken) {
+       headers['X-Captcha-Token'] = captchaToken;
+    }
+
     const response = await fetch(`${DRIVE_API_BASE}/files`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         kind: "drive#file",
         upload_type: "url",
@@ -49,8 +76,10 @@ export const PikPakService = {
     });
 
     if (!response.ok) {
-        // Handle captcha verification error specifically if needed
         const err = await response.json();
+        if (err.error_code === 16 || err.error === 'verification_required') {
+            throw new VerificationError(err);
+        }
         throw new Error(err.error_description || 'Failed to add magnet link');
     }
 
@@ -81,6 +110,46 @@ export const PikPakService = {
     }
 
     return response.json();
+  },
+
+  // --- Captcha Methods ---
+
+  async initCaptcha(): Promise<CaptchaInitResponse> {
+      const response = await fetch(`${AUTH_API_BASE}/shield/captcha/init`, {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+              client_id: CLIENT_ID,
+              action: 'POST:/v1/auth/signin' // Context usually helps
+          })
+      });
+
+      if (!response.ok) {
+          throw new Error("Failed to initialize captcha");
+      }
+      return response.json();
+  },
+
+  async verifyCaptcha(code: string, sign: string): Promise<CaptchaVerifyResponse> {
+      const response = await fetch(`${AUTH_API_BASE}/shield/captcha/verify`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+              client_id: CLIENT_ID,
+              code: code,
+              captcha_token: sign // The token from init is passed here
+          })
+      });
+
+      if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error_description || "Captcha verification failed");
+      }
+      return response.json();
   },
 
   // Helper to format bytes

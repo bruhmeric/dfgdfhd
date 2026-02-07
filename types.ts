@@ -44,3 +44,13 @@ export interface TaskStatus {
   magnet: string;
   timestamp: number;
 }
+
+export interface CaptchaInitResponse {
+  url: string;
+  captcha_token: string; // The sign/session token
+  expires_in: number;
+}
+
+export interface CaptchaVerifyResponse {
+  verification_token: string;
+}
